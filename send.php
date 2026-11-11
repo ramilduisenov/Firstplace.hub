@@ -1,11 +1,13 @@
 <?php
 /*
  * Firstplace.hub — приём заявок с формы сайта и отправка в Telegram.
- * Токен бота и chat id лежат в tg-config.php (в git не хранится).
+ * Токен бота и секретный код привязки лежат в tg-config.php (в git не хранится).
  *
- * Помощник настройки: пока chat_id не заполнен, откройте
- *   https://firstplace.uz/send.php?whoami
- * после того как написали боту (или добавили его в группу) — увидите chat id.
+ * Привязка группы:
+ *   1. Добавьте бота в группу и отправьте там: /bind ВАШ_КОД
+ *   2. Откройте https://firstplace.uz/send.php?bind=ВАШ_КОД
+ * chat id группы сохранится в tg-config.chat.php, и заявки пойдут туда.
+ * После привязки повторная привязка выключена (чтобы перепривязать, удалите tg-config.chat.php).
  */
 
 header('Content-Type: application/json; charset=utf-8');
@@ -14,7 +16,11 @@ header('X-Content-Type-Options: nosniff');
 $cfgFile = __DIR__ . '/tg-config.php';
 $cfg = is_file($cfgFile) ? (include $cfgFile) : [];
 $token = trim($cfg['bot_token'] ?? '');
-$chats = array_filter(array_map('trim', explode(',', (string)($cfg['chat_id'] ?? ''))));
+$bindCode = trim((string)($cfg['bind_code'] ?? ''));
+$chatFile = __DIR__ . '/tg-config.chat.php';
+$chatRaw = (string)($cfg['chat_id'] ?? '');
+if ($chatRaw === '' && is_file($chatFile)) $chatRaw = (string)(include $chatFile);
+$chats = array_filter(array_map('trim', explode(',', $chatRaw)));
 
 function tg_call($token, $method, $params = null) {
     $url = "https://api.telegram.org/bot{$token}/{$method}";
@@ -37,21 +43,26 @@ function tg_call($token, $method, $params = null) {
     return $res ? json_decode($res, true) : null;
 }
 
-/* Помощник: показать chat id, пока он не настроен */
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['whoami'])) {
-    if (!$token) { echo json_encode(['error' => 'Заполните bot_token в tg-config.php'], JSON_UNESCAPED_UNICODE); exit; }
-    if ($chats) { echo json_encode(['error' => 'chat_id уже настроен, помощник выключен'], JSON_UNESCAPED_UNICODE); exit; }
+/* Привязка группы по команде /bind КОД */
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['bind'])) {
+    $out = function ($msg) { echo json_encode(['result' => $msg], JSON_UNESCAPED_UNICODE); exit; };
+    if (!$token) $out('Заполните bot_token в tg-config.php');
+    if (strlen($bindCode) < 6) $out('Впишите bind_code (не короче 6 символов) в tg-config.php');
+    if ($chats) $out('Группа уже привязана. Чтобы перепривязать, удалите tg-config.chat.php');
+    if (!hash_equals($bindCode, (string)$_GET['bind'])) { sleep(2); $out('Неверный код'); }
     $u = tg_call($token, 'getUpdates');
-    $found = [];
+    $found = null;
     foreach (($u['result'] ?? []) as $upd) {
-        $m = $upd['message'] ?? $upd['my_chat_member'] ?? $upd['channel_post'] ?? null;
-        if (!empty($m['chat']['id'])) {
-            $c = $m['chat'];
-            $found[$c['id']] = ['chat_id' => $c['id'], 'type' => $c['type'], 'name' => $c['title'] ?? trim(($c['first_name'] ?? '') . ' ' . ($c['last_name'] ?? ''))];
-        }
+        $m = $upd['message'] ?? null;
+        if (!$m || empty($m['text'])) continue;
+        if (preg_match('~^/bind(@\w+)?\s+(\S+)~u', trim($m['text']), $mm) && hash_equals($bindCode, $mm[2])) $found = $m['chat'];
     }
-    echo json_encode(['chats' => array_values($found), 'hint' => $found ? 'Скопируйте нужный chat_id в tg-config.php' : 'Напишите боту любое сообщение (или добавьте его в группу и напишите там) и обновите страницу'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-    exit;
+    if (!$found) $out('Команда не найдена. Отправьте в группе: /bind ' . 'ВАШ_КОД и обновите страницу');
+    $id = (string)$found['id'];
+    if (!preg_match('~^-?\d+$~', $id)) $out('Странный chat id, привязка отменена');
+    file_put_contents($chatFile, "<?php return '" . $id . "';\n");
+    tg_call($token, 'sendMessage', ['chat_id' => $id, 'text' => 'Готово: заявки с сайта firstplace.uz будут приходить в этот чат.']);
+    $out('Привязано к чату «' . ($found['title'] ?? 'личный чат') . '». Проверьте сообщение от бота в группе.');
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo '{"ok":false}'; exit; }
