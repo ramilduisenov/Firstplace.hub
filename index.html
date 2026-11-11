@@ -759,6 +759,7 @@ footer{padding-block:44px}
     </div>
 
     <form id="lead" novalidate>
+      <div aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden"><label for="f-web">Сайт</label><input id="f-web" name="website" tabindex="-1" autocomplete="off"></div>
       <div class="field"><label for="f-name">Имя</label><input id="f-name" name="name" autocomplete="name" placeholder="Как к вам обращаться"><span class="err" id="e-name"></span></div>
       <div class="field"><label for="f-brand">Бренд или компания</label><input id="f-brand" name="brand" autocomplete="organization" placeholder="Например, Safopharm"></div>
       <div class="field"><label for="f-contact">Телефон или Telegram</label><input id="f-contact" name="contact" placeholder="+998 90 000 00 00 или @username"><span class="err" id="e-contact"></span></div>
@@ -848,8 +849,7 @@ document.getElementById("lt").innerHTML = ["Проджект-менеджер ·
 
 /* lead form */
 const form = document.getElementById("lead"), statusEl = document.getElementById("f-status"), send = document.getElementById("f-send");
-/* Прототип: заявка пока никуда не уходит. Здесь подключается отправка в Telegram-бот или на почту. */
-const dbp = null;
+/* Заявка уходит на send.php, который пересылает её в Telegram-бот. */
 function setErr(id, msg, input){ document.getElementById(id).textContent = msg; if (input) input.setAttribute("aria-invalid", msg ? "true" : "false"); }
 form.addEventListener("submit", async e => {
   e.preventDefault();
@@ -865,11 +865,15 @@ form.addEventListener("submit", async e => {
   send.disabled = true; statusEl.textContent = "Отправляем…";
   const lead = { name: v.name.trim(), brand: (v.brand||"").trim(), contact: c, industry: v.industry || "", need: v.need || "", message: (v.message||"").trim().slice(0, 4000), createdAt: new Date().toISOString() };
   let saved = false;
-  try { const db = dbp ? await dbp : null; if (db) { await db.collection("leads").add(lead); saved = true; } } catch (err) { saved = false; }
+  try {
+    const r = await fetch("send.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...lead, website: v.website || "" }) });
+    saved = r.ok && (await r.json()).ok === true;
+  } catch (err) { saved = false; }
+  if (!saved) { send.disabled = false; statusEl.textContent = "Не получилось отправить заявку. Попробуйте ещё раз через минуту."; return; }
   const done = document.createElement("div"); done.className = "done";
   done.innerHTML = '<span class="hudline">Заявка распознана · 100%</span><h3></h3><p></p><button type="button" class="btn btn-ghost">Отправить ещё одну</button>';
   done.querySelector("h3").textContent = "Спасибо, " + lead.name + "!";
-  done.querySelector("p").textContent = saved ? "Заявка сохранена. PM свяжется с вами в течение рабочего дня." : "Это демо-версия сайта: заявка не отправлена. После подключения формы она будет приходить команде хаба.";
+  done.querySelector("p").textContent = "Заявка отправлена. PM свяжется с вами в течение рабочего дня.";
   [...form.children].forEach(ch => ch.hidden = true); form.appendChild(done);
   done.querySelector("button").onclick = () => { done.remove(); form.reset(); [...form.children].forEach(ch => ch.hidden = false); send.disabled = false; statusEl.textContent = "Ответим в течение рабочего дня."; };
 });
