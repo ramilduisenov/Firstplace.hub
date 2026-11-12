@@ -50,14 +50,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['bind'])) {
     if (strlen($bindCode) < 6) $out('Впишите bind_code (не короче 6 символов) в tg-config.php');
     if ($chats) $out('Группа уже привязана. Чтобы перепривязать, удалите tg-config.chat.php');
     if (!hash_equals($bindCode, (string)$_GET['bind'])) { sleep(2); $out('Неверный код'); }
-    $u = tg_call($token, 'getUpdates');
+    $u = tg_call($token, 'getUpdates', ['allowed_updates' => '["message"]']);
+    if ($u === null) $out('Сервер хостинга не смог связаться с api.telegram.org (исходящие запросы закрыты или нет curl). Напишите в поддержку хостера.');
+    if (empty($u['ok'])) {
+        $d = (string)($u['description'] ?? 'неизвестная ошибка');
+        if (stripos($d, 'webhook') !== false) $out('У бота включён webhook (бот подключён к конструктору или другому сервису). Отключите его или создайте отдельного бота для заявок. Ответ Telegram: ' . $d);
+        if (stripos($d, 'unauthorized') !== false || stripos($d, 'not found') !== false) $out('Telegram не принял токен — проверьте bot_token в tg-config.php. Ответ Telegram: ' . $d);
+        $out('Ошибка Telegram: ' . $d);
+    }
     $found = null;
+    $seen = [];
     foreach (($u['result'] ?? []) as $upd) {
         $m = $upd['message'] ?? null;
         if (!$m || empty($m['text'])) continue;
+        $seen[] = mb_substr($m['text'], 0, 40) . ' (' . ($m['chat']['type'] ?? '?') . ')';
         if (preg_match('~^/bind(@\w+)?\s+(\S+)~u', trim($m['text']), $mm) && hash_equals($bindCode, $mm[2])) $found = $m['chat'];
     }
-    if (!$found) $out('Команда не найдена. Отправьте в группе: /bind ' . 'ВАШ_КОД и обновите страницу');
+    if (!$found) {
+        if (!$seen) $out('Бот пока не получил ни одного сообщения. Убедитесь, что бот добавлен в группу, отправьте там /bind@имя_бота ВАШ_КОД (с @username бота, иначе Telegram может не передать команду) и обновите страницу.');
+        $out('Бот видит сообщения, но среди них нет /bind с вашим кодом. Последние: ' . implode(' | ', array_slice($seen, -5)));
+    }
     $id = (string)$found['id'];
     if (!preg_match('~^-?\d+$~', $id)) $out('Странный chat id, привязка отменена');
     file_put_contents($chatFile, "<?php return '" . $id . "';\n");
